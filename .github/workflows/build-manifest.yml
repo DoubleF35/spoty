@@ -30,7 +30,12 @@ jobs:
         run: npm install --no-save music-metadata@^10
 
       - name: Build songs.json + covers
-        run: node scripts/build-manifest.mjs
+        run: |
+          if [ -f .r2-managed ]; then
+            echo "songs.json è gestito da Cloudflare R2 (tools/upload-r2.mjs) — salto la generazione.";
+            exit 0;
+          fi
+          node scripts/build-manifest.mjs
 
       - name: Commit results
         run: |

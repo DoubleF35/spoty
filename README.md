@@ -41,6 +41,30 @@ scripts/build-manifest.mjs       legge i tag e crea songs.json
 .github/workflows/               la Action che rigenera tutto a ogni upload
 ```
 
+## Libreria grande (diversi GB) → Cloudflare R2
+
+GitHub Pages non è adatto a GB di audio (max 100 MB/file, ~1 GB di sito, 100 GB/mese di banda). Per una libreria grande metti l'audio su **Cloudflare R2** (10 GB gratis, banda in uscita gratuita) e lascia nel repo solo `songs.json`. L'app riproduce da qualsiasi URL, quindi non cambia nulla nell'app.
+
+**Setup una tantum (nella dashboard Cloudflare):**
+1. **R2 → Create bucket** (es. `spoty`).
+2. Bucket → **Settings → Public access → Allow** (attiva il **Public Development URL** `https://pub-….r2.dev`; per un URL tuo puoi collegare un dominio più avanti).
+3. **R2 → Manage API Tokens → Create API Token** (permesso *Object Read & Write*). Segna Access Key ID e Secret.
+4. Segna il tuo **Account ID** (in alto a destra nella dashboard R2).
+
+**Ogni volta che aggiorni la libreria (dal tuo PC):**
+```bash
+cd tools
+npm install
+cp r2.config.example.json r2.config.json   # e compila accountId, chiavi, bucket, publicBaseUrl
+node upload-r2.mjs /percorso/della/tua/musica   # default: ../music
+```
+Lo script legge i tag, carica su R2 solo i file nuovi (salta quelli già presenti), scrive `songs.json` con gli URL R2 e crea il file `.r2-managed`. Poi:
+```bash
+cd .. && git add songs.json .r2-managed && git commit -m "aggiorna libreria" && git push
+```
+
+> `.r2-managed` dice alla GitHub Action di NON rigenerare `songs.json` (che ora è gestito da R2). La cartella `music/` locale e `tools/r2.config.json` (con le chiavi) sono in `.gitignore`: non finiscono su GitHub.
+
 ## Note
 
 - GitHub Pages: ~1 GB di spazio e ~100 GB/mese di banda consigliati — più che sufficienti per uso personale.

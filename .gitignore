@@ -1,5 +1,12 @@
+# dipendenze
 node_modules/
-package.json
-package-lock.json
+/package.json
+/package-lock.json
+
+# strumenti locali (segreti e libreria locale, NON committare)
+tools/r2.config.json
+music/
+
+# sistema
 .DS_Store
 Thumbs.db

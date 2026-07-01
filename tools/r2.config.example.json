@@ -1,0 +1,8 @@
+{
+  "accountId": "IL_TUO_ACCOUNT_ID_CLOUDFLARE",
+  "accessKeyId": "R2_ACCESS_KEY_ID",
+  "secretAccessKey": "R2_SECRET_ACCESS_KEY",
+  "bucket": "spoty",
+  "publicBaseUrl": "https://pub-xxxxxxxxxxxx.r2.dev",
+  "musicDir": "./music"
+}

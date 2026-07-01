@@ -1,0 +1,13 @@
+{
+  "name": "spoty-tools",
+  "private": true,
+  "type": "module",
+  "description": "Strumenti locali di Spoty (upload libreria su Cloudflare R2)",
+  "scripts": {
+    "upload": "node upload-r2.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.600.0",
+    "music-metadata": "^10.0.0"
+  }
+}
