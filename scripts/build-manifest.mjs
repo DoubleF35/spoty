@@ -27,6 +27,8 @@ async function walk(dir){
 }
 
 const posix = p => p.split(path.sep).join('/');
+// codifica ogni segmento del percorso (spazi, &, parentesi, apostrofi…) mantenendo le "/"
+const encodePath = rel => rel.split('/').map(encodeURIComponent).join('/');
 const idFor = rel => crypto.createHash('sha1').update(rel).digest('hex').slice(0, 12);
 
 async function main(){
@@ -70,7 +72,7 @@ async function main(){
     let added = 0;
     try { added = Math.floor((await stat(file)).mtimeMs); } catch {}
 
-    const title  = (common.title || base).trim();
+    const title  = (common.title || base.replace(/^\d+[.\-\s]+/, '')).trim();
     const artist = (common.artist || (common.artists && common.artists[0]) || 'Sconosciuto').trim();
     const album  = (common.album || '').trim();
     const duration = Math.round(format.duration || 0);
@@ -89,7 +91,7 @@ async function main(){
       track: (common.track && common.track.no) || 0,
       disc: (common.disk && common.disk.no) || 0,
       duration,
-      src: rel,
+      src: encodePath(rel),
       cover,
       added,
     });
