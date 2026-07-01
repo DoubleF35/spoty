@@ -451,7 +451,7 @@ h2.sec{font-family:var(--serif);font-weight:400;font-size:26px;margin:26px 0 14p
       </button>
     </nav>
     <div class="side-head">
-      <span>Le tue playlist</span>
+      <span>Playlist</span>
       <button id="newPl" title="Nuova playlist"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
     </div>
     <div class="plists" id="plists"></div>
@@ -988,6 +988,13 @@ function renderSidebar(){
     b.innerHTML=`<span class="ic">${I.note}</span><span class="meta"><b>${esc(p.name)}</b><small>Playlist · ${p.trackIds.length} brani</small></span>`;
     b.onclick=()=>go({type:'playlist',id:p.id});
     b.oncontextmenu=(e)=>{ e.preventDefault(); playlistMenu(e.clientX,e.clientY,p); };
+    box.appendChild(b);
+  });
+  // playlist consigliate (curate) — visibili a tutti anche nella barra laterale
+  state.featured.forEach(p=>{
+    const b=el('button','plist'+(state.view.type==='featured'&&state.view.id===p.id?' on':''));
+    b.innerHTML=`<span class="ic">${I.note}</span><span class="meta"><b>${esc(p.name)}</b><small>Consigliata · ${p.trackIds.length} brani</small></span>`;
+    b.onclick=()=>go({type:'featured',id:p.id});
     box.appendChild(b);
   });
 }
