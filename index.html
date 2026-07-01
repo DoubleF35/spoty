@@ -8,6 +8,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
 :root{
   --bg:#0a0a0b; --bg-1:#101012; --bg-2:#161619; --bg-3:#1e1e22;
@@ -99,6 +102,18 @@ svg{display:block;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:
 .plist .meta{min-width:0}
 .plist .meta b{display:block;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .plist .meta small{color:var(--tx-2);font-size:11px}
+.side-foot{padding:10px 12px 14px;border-top:1px solid var(--line-soft)}
+.acct-btn{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:8px 10px;border-radius:10px;color:var(--tx-1);transition:background .15s,color .15s}
+.acct-btn:hover{background:var(--bg-2);color:var(--tx)}
+.acct-btn>svg{width:22px;height:22px;flex:none}
+.acct-btn .av{width:32px;height:32px;border-radius:999px;flex:none;object-fit:cover}
+.acct-btn .av.ph{display:grid;place-items:center;background:linear-gradient(145deg,var(--accent),var(--accent-dim));color:var(--accent-tx);font-weight:700;font-size:14px}
+.acct-btn .meta{min-width:0}
+.acct-btn .meta b{display:block;font-weight:600;font-size:13px;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acct-btn .meta small{display:block;font-size:11px;color:var(--tx-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acct-btn .st-synced{color:#6bbf83}
+.acct-btn .st-syncing{color:var(--accent)}
+.acct-btn .st-error{color:#e0765e}
 
 /* ---------- Topbar ---------- */
 .topbar{
@@ -375,6 +390,7 @@ input[type=range]:hover::-webkit-slider-runnable-track{--accent:var(--accent)}
       <button id="newPl" title="Nuova playlist"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
     </div>
     <div class="plists" id="plists"></div>
+    <div class="side-foot" id="acct"></div>
   </aside>
 
   <main class="main" id="main">
@@ -437,7 +453,24 @@ const I = {
   volHi:'<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z" fill="currentColor" stroke="none"/><path d="M16 9a3 3 0 0 1 0 6"/><path d="M19 6a7 7 0 0 1 0 12"/></svg>',
   volMute:'<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z" fill="currentColor" stroke="none"/><path d="m17 9 5 6M22 9l-5 6"/></svg>',
   bigNote:'<svg viewBox="0 0 24 24"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg>',
+  user:'<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>',
+  logout:'<svg viewBox="0 0 24 24"><path d="M14 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4"/><path d="M10 12H3"/><path d="m6 8-4 4 4 4"/></svg>',
+  cloud:'<svg viewBox="0 0 24 24"><path d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1A4 4 0 0 1 17 18z"/></svg>',
 };
+
+/* ============================ Firebase (account + sync) ============================
+   Riusa il progetto Firebase dell'app Allenamento (Auth Google + Firestore già
+   attivi, dominio doublef35.github.io già autorizzato). I dati di Spoty vivono in
+   una collezione SEPARATA "spoty/{uid}" per non toccare i dati dell'altra app. */
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyACSeFRAkX0nc5viPz0-zjiOJ9DGKRiAzI",
+  authDomain: "workout-e9380.firebaseapp.com",
+  projectId: "workout-e9380",
+  storageBucket: "workout-e9380.firebasestorage.app",
+  messagingSenderId: "179387739267",
+  appId: "1:179387739267:web:bf845342582a9e637fffb6"
+};
+const cloud = { configured:false, auth:null, db:null, user:null, ref:null, unsub:null, status:'off', pushT:null };
 
 /* ============================ State ============================ */
 const LS_KEY = 'spoty:v2';
@@ -449,6 +482,7 @@ const state = {
   queue: [], base: [], qi: -1,
   playing: false, shuffle: false, repeat: 'off',
   volume: 1, muted: false,
+  updatedAt: 0,
 };
 
 const audio = document.getElementById('audio');
@@ -468,13 +502,106 @@ function load(){
     state.repeat = ['off','all','one'].includes(d.repeat)?d.repeat:'off';
     state.volume = typeof d.volume==='number'?d.volume:1;
     state.muted = !!d.muted;
+    state.updatedAt = Number(d.updatedAt)||0;
   }catch(e){}
 }
 function save(){
   localStorage.setItem(LS_KEY, JSON.stringify({
     playlists:state.playlists, liked:state.liked, shuffle:state.shuffle,
     repeat:state.repeat, volume:state.volume, muted:state.muted,
+    updatedAt:state.updatedAt,
   }));
+}
+// mutazione di dati sincronizzabili (playlist/preferiti): timbra, salva e spinge in cloud
+function persist(){ state.updatedAt = Date.now(); save(); if(cloud.user) cloudPush(false); }
+
+/* ============================ Cloud sync (Firebase) ============================ */
+function cloudConfigured(){ return !!(FIREBASE_CONFIG && FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.projectId); }
+function cloudInit(){
+  if(!cloudConfigured() || typeof firebase==='undefined'){ cloud.status='off'; renderAccount(); return; }
+  try{
+    firebase.initializeApp(FIREBASE_CONFIG);
+    cloud.auth=firebase.auth(); cloud.db=firebase.firestore();
+    cloud.auth.getRedirectResult().catch(()=>{});
+    cloud.configured=true; cloud.status='signedout';
+    cloud.auth.onAuthStateChanged(onAuth);
+  }catch(e){ cloud.status='off'; }
+  renderAccount();
+}
+function cloudSignIn(){
+  if(!cloud.configured) return;
+  const p=new firebase.auth.GoogleAuthProvider();
+  cloud.auth.signInWithPopup(p).catch(e=>{
+    if(e && (e.code==='auth/popup-blocked'||e.code==='auth/cancelled-popup-request'||e.code==='auth/operation-not-supported-in-this-environment')) cloud.auth.signInWithRedirect(p);
+    else if(e && e.code!=='auth/popup-closed-by-user') toast(authErr(e));
+  });
+}
+function cloudSignOut(){ if(cloud.auth) cloud.auth.signOut(); }
+function onAuth(user){
+  if(cloud.unsub){ cloud.unsub(); cloud.unsub=null; }
+  cloud.user=user||null;
+  if(!user){ cloud.status='signedout'; renderAccount(); return; }
+  cloud.status='syncing'; cloud.ref=cloud.db.collection('spoty').doc(user.uid);
+  renderAccount();
+  cloud.unsub=cloud.ref.onSnapshot(snap=>{
+    if(!snap.exists){ cloudPush(true); return; }        // primo accesso: carica i dati locali
+    const data=snap.data()||{};
+    const remote=Number(data.updatedAt)||0, local=Number(state.updatedAt)||0;
+    if(remote>local) applyCloud(data);
+    else if(local>remote) cloudPush(true);
+    else { cloud.status='synced'; renderAccount(); }
+  }, err=>{ cloud.status='error'; renderAccount(); if(err&&err.code==='permission-denied') toast('Sync bloccato: aggiungi la regola Firestore per "spoty"'); });
+}
+function applyCloud(data){
+  const inLiked=Array.isArray(data.liked)?data.liked.map(String):[];
+  const inPls=(Array.isArray(data.playlists)?data.playlists:[]).filter(p=>p&&p.id)
+    .map(p=>({ id:String(p.id), name:String(p.name||'Playlist'), trackIds:(Array.isArray(p.trackIds)?p.trackIds.map(String):[]) }));
+  const localContent = state.liked.length || state.playlists.length;
+  // cloud vuoto ma ho dati locali (primo login da ospite): carico i miei in cloud
+  if(inLiked.length===0 && inPls.length===0 && localContent && !(Number(data.updatedAt))){ cloudPush(true); return; }
+  state.liked = inLiked;
+  state.playlists = inPls;
+  state.updatedAt = Number(data.updatedAt)||Date.now();
+  save();
+  cloud.status='synced';
+  renderSidebar(); render(); renderAccount();
+}
+function cloudPush(immediate){
+  if(!cloud.user || !cloud.ref) return;
+  clearTimeout(cloud.pushT);
+  const doPush=()=>{
+    cloud.status='syncing'; renderAccount();
+    cloud.ref.set({ playlists:JSON.parse(JSON.stringify(state.playlists)), liked:state.liked.slice(), updatedAt:Number(state.updatedAt)||Date.now() })
+      .then(()=>{ cloud.status='synced'; renderAccount(); })
+      .catch(e=>{ cloud.status='error'; renderAccount(); if(e&&e.code==='permission-denied') toast('Sync bloccato: aggiungi la regola Firestore per "spoty"'); });
+  };
+  if(immediate) doPush(); else cloud.pushT=setTimeout(doPush,900);
+}
+function authErr(e){
+  const c=(e&&e.code)||'';
+  if(c.indexOf('unauthorized-domain')>-1) return 'Dominio non autorizzato in Firebase';
+  if(c.indexOf('network')>-1) return 'Errore di rete';
+  return 'Accesso non riuscito';
+}
+function renderAccount(){
+  const a=$('#acct'); if(!a) return;
+  if(!cloud.configured){ a.innerHTML=''; return; }
+  if(!cloud.user){
+    a.innerHTML=`<button class="acct-btn" id="acctIn">${I.user}<span class="meta"><b>Accedi</b><small>Sincronizza i tuoi dati</small></span></button>`;
+    a.querySelector('#acctIn').onclick=cloudSignIn;
+    return;
+  }
+  const u=cloud.user;
+  const st = cloud.status==='synced'?'Sincronizzato':cloud.status==='syncing'?'Sincronizzazione…':cloud.status==='error'?'Errore di sync':'';
+  const initial=(u.displayName||u.email||'?').slice(0,1).toUpperCase();
+  a.innerHTML=`<button class="acct-btn user" id="acctMenu">
+      ${u.photoURL?`<img class="av" src="${esc(u.photoURL)}" alt="" referrerpolicy="no-referrer">`:`<span class="av ph">${esc(initial)}</span>`}
+      <span class="meta"><b>${esc(u.displayName||u.email||'Account')}</b><small class="st st-${cloud.status}">${esc(st)}</small></span>
+    </button>`;
+  a.querySelector('#acctMenu').onclick=(e)=>{ const r=e.currentTarget.getBoundingClientRect(); openMenu(r.left, r.top-8, [
+    {head: u.email||''},
+    {label:'Esci', icon:I.logout, onClick:cloudSignOut},
+  ]); };
 }
 
 /* ============================ Boot ============================ */
@@ -503,6 +630,7 @@ async function boot(){
     state.playlists.forEach(p=>{ p.trackIds = (p.trackIds||[]).filter(id=>ids.has(id)); });
   }
   renderSidebar(); render(); syncPlayerUI();
+  cloudInit();
 }
 function normalize(s){
   if(!s||!s.src) return null;
@@ -691,29 +819,29 @@ function toggleLike(id){
   const i=state.liked.indexOf(id);
   if(i<0){ state.liked.unshift(id); toast('Aggiunto ai preferiti'); }
   else { state.liked.splice(i,1); toast('Rimosso dai preferiti'); }
-  save(); renderNP(); renderSidebar();
+  persist(); renderNP(); renderSidebar();
   if(state.view.type==='liked'||state.view.type==='home'||state.view.type==='search'||state.view.type==='playlist') render();
 }
 
 /* ============================ Playlists ============================ */
 function createPlaylist(name, firstTrack){
   const p={ id:uid(), name:name||'Nuova playlist', trackIds:firstTrack?[firstTrack]:[] };
-  state.playlists.unshift(p); save(); renderSidebar();
+  state.playlists.unshift(p); persist(); renderSidebar();
   return p;
 }
 function deletePlaylist(id){
-  state.playlists=state.playlists.filter(p=>p.id!==id); save(); renderSidebar();
+  state.playlists=state.playlists.filter(p=>p.id!==id); persist(); renderSidebar();
   if(state.view.type==='playlist'&&state.view.id===id){ go({type:'home'}); }
 }
 function addToPlaylist(pid, sid){
   const p=state.playlists.find(p=>p.id===pid); if(!p) return;
   if(p.trackIds.includes(sid)){ toast('Già presente in "'+p.name+'"'); return; }
-  p.trackIds.push(sid); save(); renderSidebar(); toast('Aggiunto a "'+p.name+'"');
+  p.trackIds.push(sid); persist(); renderSidebar(); toast('Aggiunto a "'+p.name+'"');
   if(state.view.type==='playlist'&&state.view.id===pid) render();
 }
 function removeFromPlaylist(pid, sid){
   const p=state.playlists.find(p=>p.id===pid); if(!p) return;
-  p.trackIds=p.trackIds.filter(x=>x!==sid); save(); renderSidebar();
+  p.trackIds=p.trackIds.filter(x=>x!==sid); persist(); renderSidebar();
   if(state.view.type==='playlist'&&state.view.id===pid) render();
   toast('Rimosso dalla playlist');
 }
@@ -832,7 +960,7 @@ function bindCollection(v, ids, opt){
   v.querySelector('[data-act="shuf"]')?.addEventListener('click',()=>{ toggleShuffle(); if(ids.length) playContext(ctxIds(), null); });
   v.querySelector('[data-act="renamepl"]')?.addEventListener('click',async()=>{
     const p=state.playlists.find(p=>p.id===opt.pid); if(!p)return;
-    const name=await askText('Rinomina playlist',p.name); if(name){ p.name=name; save(); renderSidebar(); render(); }
+    const name=await askText('Rinomina playlist',p.name); if(name){ p.name=name; persist(); renderSidebar(); render(); }
   });
   v.querySelector('[data-act="delpl"]')?.addEventListener('click',async()=>{
     const p=state.playlists.find(p=>p.id===opt.pid); if(!p)return;
@@ -946,7 +1074,7 @@ function trackMenu(x,y,id,opt){
 }
 function playlistMenu(x,y,p){
   openMenu(x,y,[
-    {label:'Rinomina', icon:I.edit, onClick:async()=>{ const n=await askText('Rinomina playlist',p.name); if(n){ p.name=n; save(); renderSidebar(); if(state.view.type==='playlist'&&state.view.id===p.id) render(); } }},
+    {label:'Rinomina', icon:I.edit, onClick:async()=>{ const n=await askText('Rinomina playlist',p.name); if(n){ p.name=n; persist(); renderSidebar(); if(state.view.type==='playlist'&&state.view.id===p.id) render(); } }},
     {label:'Elimina', icon:I.trash, danger:true, onClick:async()=>{ if(await confirmBox('Eliminare "'+p.name+'"?')) deletePlaylist(p.id); }},
   ]);
 }
