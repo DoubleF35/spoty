@@ -324,6 +324,11 @@ input[type=range]:hover::-webkit-slider-runnable-track{--accent:var(--accent)}
 .scrim-back.on{display:block}
 
 /* ---------- Responsive ---------- */
+/* Su touch non c'è :hover — mostra sempre cuore e "…" con area di tocco ampia */
+@media (hover:none),(pointer:coarse){
+  .like,.more{opacity:1;position:relative}
+  .like::after,.more::after{content:"";position:absolute;inset:-6px}
+}
 @media (max-width:900px){
   :root{--bar:82px}
   .app{grid-template-columns:1fr}
@@ -477,17 +482,26 @@ async function boot(){
   load();
   applyVolume();
   wire();
+  let manifestOk = false;
   try{
     const res = await fetch('songs.json', {cache:'no-cache'});
-    const data = res.ok ? await res.json() : [];
-    const list = Array.isArray(data) ? data : (data.songs||[]);
-    state.songs = list.map(normalize).filter(Boolean);
-  }catch(e){ state.songs = []; }
+    if(res.ok){
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : (data && Array.isArray(data.songs) ? data.songs : null);
+      if(list){ state.songs = list.map(normalize).filter(Boolean); manifestOk = true; }
+    }
+  }catch(e){ /* fetch/parse fallito: non toccare i dati salvati */ }
+  // dedup per id (state.songs e byId devono restare 1:1)
+  const seen = new Set();
+  state.songs = state.songs.filter(s => seen.has(s.id) ? false : (seen.add(s.id), true));
   state.byId = new Map(state.songs.map(s=>[s.id,s]));
-  // prune stale references
-  const ids = state.byId;
-  state.liked = state.liked.filter(id=>ids.has(id));
-  state.playlists.forEach(p=>{ p.trackIds = (p.trackIds||[]).filter(id=>ids.has(id)); });
+  // Prune SOLO se il manifest è stato caricato davvero: un fetch fallito o degradato
+  // non deve mai cancellare preferiti/playlist recuperabili.
+  if(manifestOk){
+    const ids = state.byId;
+    state.liked = state.liked.filter(id=>ids.has(id));
+    state.playlists.forEach(p=>{ p.trackIds = (p.trackIds||[]).filter(id=>ids.has(id)); });
+  }
   renderSidebar(); render(); syncPlayerUI();
 }
 function normalize(s){
@@ -524,6 +538,12 @@ function playContext(ids, songId){
 function loadCurrent(autoplay){
   const song = state.byId.get(state.queue[state.qi]);
   if(!song) return;
+  // reset del transport UI: niente posizione/tempo del brano precedente
+  const seek = $('#seek');
+  seek.value = 0; seek.style.setProperty('--p','0%');
+  $('#cur').textContent = '0:00';
+  $('#dur').textContent = fmt(song.duration||0); // durata nota da songs.json, poi rifinita da loadedmetadata
+  seeking = false;                                // annulla un eventuale drag in corso
   audio.src = song.src;
   audio.load();
   if(autoplay){ audio.play().catch(()=>{}); }
@@ -553,7 +573,12 @@ function next(auto){
 }
 function prev(){
   if(!state.queue.length) return;
-  if(audio.currentTime>3 || state.qi===0){ audio.currentTime=0; return; }
+  if(audio.currentTime>3){ audio.currentTime=0; return; }
+  if(state.qi===0){
+    if(state.repeat==='all'){ state.qi=state.queue.length-1; loadCurrent(true); }
+    else { audio.currentTime=0; }
+    return;
+  }
   state.qi--; loadCurrent(true);
 }
 function playAt(i){ if(i>=0&&i<state.queue.length){ state.qi=i; loadCurrent(true); } }
@@ -578,11 +603,23 @@ function setMediaSession(song){
     navigator.mediaSession.setActionHandler('pause', ()=>audio.pause());
     navigator.mediaSession.setActionHandler('previoustrack', ()=>prev());
     navigator.mediaSession.setActionHandler('nexttrack', ()=>next(false));
+    const seekTo = d=>{ if(d && d.fastSeek && 'fastSeek' in audio){ audio.fastSeek(d.seekTime); } else if(d){ audio.currentTime=d.seekTime; } updatePositionState(); };
+    try{ navigator.mediaSession.setActionHandler('seekto', seekTo); }catch(e){}
+    try{ navigator.mediaSession.setActionHandler('seekbackward', d=>{ audio.currentTime=Math.max(0,audio.currentTime-((d&&d.seekOffset)||10)); updatePositionState(); }); }catch(e){}
+    try{ navigator.mediaSession.setActionHandler('seekforward', d=>{ audio.currentTime=Math.min(audio.duration||audio.currentTime,audio.currentTime+((d&&d.seekOffset)||10)); updatePositionState(); }); }catch(e){}
   }catch(e){}
+}
+function updatePositionState(){
+  if(!('mediaSession' in navigator) || typeof navigator.mediaSession.setPositionState!=='function') return;
+  const d=audio.duration, r=audio.playbackRate;
+  if(!isFinite(d) || d<=0) return;
+  const pos=Math.min(Math.max(audio.currentTime||0,0),d);
+  try{ navigator.mediaSession.setPositionState({duration:d, position:pos, playbackRate:(r&&isFinite(r)&&r>0)?r:1}); }catch(e){}
 }
 
 /* ============================ Audio events ============================ */
-audio.addEventListener('play', ()=>{ state.playing=true; syncPlayPause(); markRows(); });
+let errStreak = 0; // brani consecutivi non riproducibili (anti-loop)
+audio.addEventListener('play', ()=>{ errStreak=0; state.playing=true; syncPlayPause(); markRows(); });
 audio.addEventListener('pause', ()=>{ state.playing=false; syncPlayPause(); markRows(); });
 audio.addEventListener('ended', ()=>next(true));
 audio.addEventListener('timeupdate', ()=>{
@@ -592,11 +629,24 @@ audio.addEventListener('timeupdate', ()=>{
   const pct = d? (c/d*1000):0;
   const seek = $('#seek'); seek.value = pct;
   seek.style.setProperty('--p', (d?c/d*100:0)+'%');
+  updatePositionState();
 });
 audio.addEventListener('loadedmetadata', ()=>{
   $('#dur').textContent = fmt(audio.duration||0);
+  updatePositionState();
 });
-audio.addEventListener('error', ()=>{ if(state.queue.length) { toast('Impossibile riprodurre questo brano'); } });
+audio.addEventListener('error', ()=>{
+  if(!state.queue.length) return;
+  toast('Impossibile riprodurre questo brano');
+  // in repeat-one riproverebbe all'infinito lo stesso brano rotto
+  if(state.repeat==='one'){ audio.pause(); state.playing=false; syncPlayerUI(); markRows(); return; }
+  errStreak++;
+  if(errStreak >= state.queue.length){ // tutta la coda ha fallito: fermati invece di ciclare
+    errStreak=0; audio.pause(); state.playing=false; syncPlayerUI(); markRows();
+    toast('Nessun brano riproducibile'); return;
+  }
+  next(true); // salta al brano successivo
+});
 
 /* ============================ Player UI ============================ */
 let seeking=false;
@@ -611,6 +661,8 @@ function syncPlayPause(){
 }
 function syncToggles(){
   $('#shuffle').classList.toggle('on', state.shuffle);
+  // tiene allineato il pulsante "Casuale" della vista con quello della player bar
+  document.querySelector('#view [data-act="shuf"]')?.classList.toggle('act', state.shuffle);
   const r=$('#repeat'); r.classList.toggle('on', state.repeat!=='off');
   r.title = state.repeat==='one'?'Ripeti brano':state.repeat==='all'?'Ripeti tutto':'Ripeti';
   r.innerHTML = state.repeat==='one'
@@ -968,16 +1020,27 @@ function wire(){
   search.onfocus=()=>{ if(state.view.type!=='search') go({type:'search'}); };
 
   const seek=$('#seek');
-  seek.addEventListener('input',()=>{ seeking=true; const d=audio.duration||0; $('#cur').textContent=fmt(d*seek.value/1000); seek.style.setProperty('--p',(seek.value/10)+'%'); });
-  seek.addEventListener('change',()=>{ const d=audio.duration||0; audio.currentTime=d*seek.value/1000; seeking=false; });
+  let dragToken=null; // identifica il brano su cui è iniziato il drag
+  seek.addEventListener('input',()=>{ seeking=true; dragToken=state.qi+'|'+audio.src; const d=audio.duration||0; $('#cur').textContent=fmt(d*seek.value/1000); seek.style.setProperty('--p',(seek.value/10)+'%'); });
+  seek.addEventListener('change',()=>{
+    seeking=false;
+    // se il brano è cambiato durante il drag (es. auto-avanzamento), ignora lo scrub obsoleto
+    if(dragToken!==null && dragToken!==state.qi+'|'+audio.src){ dragToken=null; return; }
+    dragToken=null;
+    const d=audio.duration||0;
+    if(isFinite(d)&&d>0) audio.currentTime=d*seek.value/1000;
+  });
 
   const vol=$('#vol');
   vol.addEventListener('input',()=>{ state.volume=vol.value/100; state.muted=false; applyVolume(); syncToggles(); save(); });
   $('#vmute').onclick=()=>{ state.muted=!state.muted; applyVolume(); syncToggles(); save(); };
 
   document.addEventListener('keydown',e=>{
-    const tag=(e.target.tagName||'').toLowerCase();
-    if(tag==='input'||tag==='textarea') return;
+    const t=e.target, tag=(t.tagName||'').toLowerCase();
+    if(tag==='input'||tag==='textarea'||t.isContentEditable) return;
+    // lascia che i controlli con focus gestiscano i propri tasti (Space/Enter, scroll…)
+    const interactive = t!==document.body && (tag==='button'||tag==='a'||tag==='select'||(t.getAttribute&&t.getAttribute('role'))||(typeof t.tabIndex==='number'&&t.tabIndex>=0));
+    if(interactive) return;
     if(e.code==='Space'){ e.preventDefault(); togglePlay(); }
     else if(e.key==='ArrowRight'&&e.shiftKey){ next(false); }
     else if(e.key==='ArrowLeft'&&e.shiftKey){ prev(); }
@@ -989,7 +1052,14 @@ function wire(){
 
 /* ============================ Service worker ============================ */
 if('serviceWorker' in navigator){
-  window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+  window.addEventListener('load', async ()=>{
+    try{
+      const reg = await navigator.serviceWorker.register('sw.js', {updateViaCache:'none'});
+      reg.update();
+      let refreshing=false;
+      navigator.serviceWorker.addEventListener('controllerchange', ()=>{ if(refreshing) return; refreshing=true; location.reload(); });
+    }catch(e){}
+  });
 }
 
 boot();

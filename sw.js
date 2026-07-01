@@ -1,8 +1,8 @@
 // Spoty service worker — cache leggera del guscio dell'app.
 // NON intercetta i file audio (songs/*): così i "range request" per il seek
 // vanno diretti in rete e la riproduzione resta fluida.
-const CACHE = 'spoty-shell-v3';
-const SHELL = ['./', './index.html', './manifest.webmanifest', './icon.svg'];
+const CACHE = 'spoty-shell-v4';
+const SHELL = ['./index.html', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -23,6 +23,16 @@ self.addEventListener('fetch', e => {
   if (url.origin !== location.origin) return;      // font/CDN: rete
   if (url.pathname.includes('/songs/')) return;     // audio: rete diretta (range)
 
+  // HTML / navigazione: network-first, così gli aggiornamenti dell'app raggiungono
+  // anche i PWA installati; fallback alla copia in cache quando si è offline.
+  if (req.mode === 'navigate' || url.pathname.endsWith('/') || url.pathname.endsWith('.html')) {
+    e.respondWith(
+      fetch(req).then(r => { const cp = r.clone(); caches.open(CACHE).then(c => c.put('./index.html', cp)); return r; })
+                .catch(() => caches.match(req).then(hit => hit || caches.match('./index.html')))
+    );
+    return;
+  }
+
   // songs.json: sempre fresco, con fallback offline
   if (url.pathname.endsWith('songs.json')) {
     e.respondWith(
@@ -32,7 +42,7 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // guscio + copertine: cache-first
+  // asset immutabili (icona, manifest, copertine): cache-first
   e.respondWith(
     caches.match(req).then(hit => hit || fetch(req).then(r => {
       if (r.ok) { const cp = r.clone(); caches.open(CACHE).then(c => c.put(req, cp)); }

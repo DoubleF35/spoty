@@ -70,14 +70,25 @@ async function main(){
     let added = 0;
     try { added = Math.floor((await stat(file)).mtimeMs); } catch {}
 
+    const title  = (common.title || base).trim();
+    const artist = (common.artist || (common.artists && common.artists[0]) || 'Sconosciuto').trim();
+    const album  = (common.album || '').trim();
+    const duration = Math.round(format.duration || 0);
+
+    // id stabile e indipendente dal percorso: con tag reali usa artista+titolo+album+durata,
+    // così rinominare o spostare il file NON rompe playlist e preferiti; altrimenti ripiega sul percorso.
+    const id = common.title
+      ? crypto.createHash('sha1').update([artist, title, album, duration].join('\u0000')).digest('hex').slice(0, 12)
+      : idFor(rel);
+
     songs.push({
-      id: idFor(rel),
-      title: (common.title || base).trim(),
-      artist: (common.artist || (common.artists && common.artists[0]) || 'Sconosciuto').trim(),
-      album: (common.album || '').trim(),
+      id,
+      title,
+      artist,
+      album,
       track: (common.track && common.track.no) || 0,
       disc: (common.disk && common.disk.no) || 0,
-      duration: Math.round(format.duration || 0),
+      duration,
       src: rel,
       cover,
       added,
